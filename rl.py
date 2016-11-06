@@ -38,11 +38,11 @@ class ActorCritic(object):
         self._env = env
         self._env_example = env()
         self._options = options
-        state_dim = self._env_example.observation_space.shape[0]
+        state_dim = self._env_example.observation_space.shape
         self._graph = tf.Graph()
         self._threads = []
         with self._graph.as_default(), tf.device('/cpu:0'):
-            self._state = tf.placeholder(tf.float32, shape=[None, state_dim], name='states')
+            self._state = tf.placeholder(tf.float32, shape=[None] + list(state_dim) , name='states')
             self._action = tf.placeholder(tf.int64, shape=[None], name='actions')
             self._reward = tf.placeholder(tf.float32, shape=[None, 1], name='rewards')
             self._done = tf.placeholder(tf.float32, shape=[1], name='done')
@@ -106,7 +106,7 @@ class ActorCritic(object):
         return self.sess.run(
             self._tf_policy,
             {self._state: observation.reshape(
-                1, self._env_example.observation_space.shape[0])})
+                [1] + list(self._env_example.observation_space.shape))})
 
     def Learn(self, num_steps):
         if any([t.is_alive() for t in self._threads]):
