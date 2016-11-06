@@ -1,4 +1,5 @@
 import threading
+import time
 
 import numpy as np
 import numpy.random
@@ -90,6 +91,7 @@ class ActorCritic(object):
             self._summary_op = tf.merge_all_summaries()
 
             self.sess = tf.Session(config=tf.ConfigProto(log_device_placement=True))
+        self._last_start = None
 
     def Init(self, logs_dir):
         with self._graph.as_default():
@@ -162,4 +164,13 @@ class ActorCritic(object):
 
         if step % 50 == 0:
             self._writer.add_summary(self.sess.run(self._summary_op, feed_dict), step)
+
+        if step % 1000 == 0:
+            if self._last_start:
+                self._writer.add_summary(tf.Summary(value=[
+                    tf.Summary.Value(
+                        tag='Steps per sec',
+                        simple_value=1000./(time.time() - self._last_start))]), step)
+            self._last_start = time.time()
+
         return step
