@@ -39,11 +39,6 @@ tf.app.flags.DEFINE_integer('init_buffer_size', 10 ** 5,
 # to 0.01 for 1M steps
 tf.app.flags.DEFINE_string('exploration', '', 'Experience buffer spec.')
 
-tf.app.flags.DEFINE_float('start_temp', 100, 'Start temperature for softmax policy')
-tf.app.flags.DEFINE_float('min_temp', 0.01, 'Minimum policy temperature')
-tf.app.flags.DEFINE_integer('decay_temp', 3 * 10 ** 6,
-                            'Number of steps to decay temperature to minimum')
-
 tf.app.flags.DEFINE_integer('summary_every_steps', 250, 'The frequence of summarizing stuff')
 
 tf.app.flags.DEFINE_boolean('image_summaries', True,
@@ -94,7 +89,7 @@ def CartPoleQNetwork(state, num_actions, unused_is_training):
 
 ROLLOUT_LEN = 1 # 20
 GAMMA = 0.99
-UPDATE_STEPS = 15000
+UPDATE_STEPS = 10000
 
 
 def ReplayBufferFactory(spec):
@@ -162,11 +157,11 @@ def PolicyFactory(spec, qvalues, global_step):
     return policy
 
 
-def GenerateExperience(env, policy, step_callback, stats_callback, iters):
+def GenerateExperience(env, policy, step_callback, stats_callback):
     episode_rew = 0.
     episode_len = 0.
     old_s = env.reset()
-    for _ in xrange(iters):
+    while True:
         ss, aa, rr, ss1, gg = [], [], [], [], []
         done = False
         while not done and len(ss) < ROLLOUT_LEN:
@@ -197,8 +192,10 @@ def GenerateExperience(env, policy, step_callback, stats_callback, iters):
             stats_callback(episode_rew, episode_len)
             episode_rew, episode_len = 0., 0.
 
-        step_callback(np.array(ss), np.array(aa), np.array(rr), np.array(ss1),
-                      np.array(gg), 100)
+        should_continue = step_callback(np.array(ss), np.array(aa), np.array(rr),
+                                        np.array(ss1), np.array(gg), 100)
+        if not should_continue:
+            return
 
 
 def InitSession(sess, folder):
@@ -223,7 +220,6 @@ def InitSession(sess, folder):
     return saver
 
 def main(argv):
-    #    'spa-%d' % FLAGS.steps_per_action
     folder = os.path.join(FLAGS.base_dir, FLAGS.env, 'lr-%.1E' % FLAGS.lr,
                           FLAGS.buffer,
                           'bs-%d' % FLAGS.batch_size,
@@ -231,10 +227,13 @@ def main(argv):
 
     env = gym.make(FLAGS.env)
     buf = ReplayBufferFactory(FLAGS.buffer)
+    def FillBuffer(*args):
+        buf.add(*args)
+        return buf.inserted < FLAGS.init_buffer_size
 
     while buf.inserted < FLAGS.init_buffer_size:
-        GenerateExperience(env, lambda _: env.action_space.sample(), lambda *args: buf.add(*args),
-                           lambda *args: None, 10)
+        GenerateExperience(env, lambda _: env.action_space.sample(),
+                           FillBuffer, lambda *args: None)
 
     state2q = CartPoleQNetwork
 
@@ -320,12 +319,15 @@ def main(argv):
             for _ in xrange(FLAGS.steps_per_action):
                 idx, ss, aa, rr, ss1, gg, ww = buf.sample(FLAGS.batch_size)
                 if ss is None:
-                    return
+                    return True
 
                 feed_dict = {state: ss, action: aa, reward: rr, state1: ss1,
                              gamma: gg, is_weights: ww, is_training: True}
 
                 cur_step = sess.run(global_step)
+                if cur_step > FLAGS.steps:
+                    return False  # Time to stop
+
                 if cur_step % FLAGS.summary_every_steps != 0:
                     weights, _ = sess.run([td_err_weight, train_op], feed_dict)
                 else:
@@ -348,8 +350,9 @@ def main(argv):
                             simple_value=UPDATE_STEPS / (time.time() - steps['time']))]),
                         cur_step)
                     steps['time'] = time.time()
+            return True
 
-        GenerateExperience(env, Policy, Step, Stat, FLAGS.steps * FLAGS.steps_per_action)
+        GenerateExperience(env, Policy, Step, Stat)
 
 
 if __name__ == "__main__":
