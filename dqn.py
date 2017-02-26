@@ -59,16 +59,25 @@ def Select(value, index):
 
 def CartPoleQNetwork(state, num_actions, unused_is_training):
     hidden = tf.contrib.layers.fully_connected(
-        state, 32,
+        state, 64,
         activation_fn=tf.nn.elu,
         weights_initializer=tf.truncated_normal_initializer(stddev=0.1),
+        weights_regularizer=tf.contrib.layers.l2_regularizer(0.005),
         scope='hidden1')
     tf.contrib.layers.summarize_tensor(hidden)
     hidden = tf.contrib.layers.fully_connected(
-        hidden, 32,
+        hidden, 64,
         activation_fn=tf.nn.elu,
         weights_initializer=tf.truncated_normal_initializer(stddev=0.1),
+        weights_regularizer=tf.contrib.layers.l2_regularizer(0.005),
         scope='hidden2')
+    tf.contrib.layers.summarize_tensor(hidden)
+    hidden = tf.contrib.layers.fully_connected(
+        hidden, 64,
+        activation_fn=tf.nn.elu,
+        weights_initializer=tf.truncated_normal_initializer(stddev=0.1),
+        weights_regularizer=tf.contrib.layers.l2_regularizer(0.005),
+        scope='hidden3')
     tf.contrib.layers.summarize_tensor(hidden)
 
     value = tf.contrib.layers.linear(
@@ -277,7 +286,8 @@ def main(argv):
     tf.summary.scalar("Scalars/Total_Loss", loss)
 
     if FLAGS.image_summaries:
-        render_image = tf.placeholder(tf.uint8, shape=[400, 600, 3], name='render')
+        test_image = env.render(mode='rgb_array')
+        render_image = tf.placeholder(tf.uint8, shape=test_image.shape, name='render')
         tf.summary.image('Render', tf.expand_dims(render_image, 0), max_outputs=3)
 
     optimizer = tf.train.AdamOptimizer(FLAGS.lr)
