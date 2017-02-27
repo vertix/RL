@@ -17,12 +17,11 @@ class ExperienceBuffer(object):
 
     def add(self, s, a, r, s1, gamma, unused_weight):
         if self.ss is None:
-            state_size = s.shape[1]
-            self.ss = np.zeros(
-                (state_size, self.buffer_size), dtype=np.float32)
+            # Initialize
+            state_shape = list(s.shape[1:])
+            self.ss = np.zeros([self.buffer_size] + state_shape, dtype=np.float32)
             self.aa = np.zeros(self.buffer_size, dtype=np.int16)
-            self.ss1 = np.zeros(
-                (state_size, self.buffer_size), dtype=np.float32)
+            self.ss1 = np.zeros([self.buffer_size] + state_shape, dtype=np.float32)
             self.rr = np.zeros(self.buffer_size, dtype=np.float32)
             self.gg = np.zeros(self.buffer_size, dtype=np.float32)
 
@@ -32,10 +31,10 @@ class ExperienceBuffer(object):
             self.inserted += 1
             indexes.append(cur_index)
 
-        self.ss[:, indexes] = s.transpose()
+        self.ss[indexes, ...] = s
         self.aa[indexes] = a
         self.rr[indexes] = r
-        self.ss1[:, indexes] = s1.transpose()
+        self.ss1[indexes, ...] = s1
         self.gg[indexes] = gamma
 
         if len(self.index) < self.buffer_size:
@@ -43,8 +42,8 @@ class ExperienceBuffer(object):
         self.inserted += 1
 
     @property
-    def state_size(self):
-        return None if self.ss is None else self.ss.shape[0]
+    def state_shape(self):
+        return None if self.ss is None else self.ss.shape[1:]
 
     def tree_update(self, buffer_index, new_weight):
         pass
@@ -54,8 +53,8 @@ class ExperienceBuffer(object):
             return None, None, None, None, None
 
         indexes = np.random.choice(min(self.buffer_size, self.inserted), size)
-        return (indexes, np.transpose(self.ss[:, indexes]), self.aa[indexes], self.rr[indexes],
-                np.transpose(self.ss1[:, indexes]), self.gg[indexes], np.ones(len(indexes)))
+        return (indexes, np.transpose(self.ss[indexes, ...]), self.aa[indexes], self.rr[indexes],
+                np.transpose(self.ss1[indexes, ...]), self.gg[indexes], np.ones(len(indexes)))
 
 
 class WeightedExperienceBuffer(object):
@@ -97,12 +96,10 @@ class WeightedExperienceBuffer(object):
     def add(self, s, a, r, s1, gamma, weight):
         if self.ss is None:
             # Initialize
-            state_size = s.shape[1]
-            self.ss = np.zeros(
-                (state_size, self.buffer_size), dtype=np.float32)
+            state_shape = list(s.shape[1:])
+            self.ss = np.zeros([self.buffer_size] + state_shape, dtype=np.float32)
             self.aa = np.zeros(self.buffer_size, dtype=np.int16)
-            self.ss1 = np.zeros(
-                (state_size, self.buffer_size), dtype=np.float32)
+            self.ss1 = np.zeros([self.buffer_size] + state_shape, dtype=np.float32)
             self.rr = np.zeros(self.buffer_size, dtype=np.float32)
             self.gg = np.zeros(self.buffer_size, dtype=np.float32)
 
@@ -112,18 +109,18 @@ class WeightedExperienceBuffer(object):
             self.inserted += 1
             indexes.append(cur_index)
 
-        self.ss[:, indexes] = s.transpose()
+        self.ss[indexes, ...] = s
         self.aa[indexes] = a
         self.rr[indexes] = r
-        self.ss1[:, indexes] = s1.transpose()
+        self.ss1[indexes, ...] = s1
         self.gg[indexes] = gamma
 
         for idx in indexes:
             self.tree_update(idx, weight)
 
     @property
-    def state_size(self):
-        return None if self.ss is None else self.ss.shape[0]
+    def state_shape(self):
+        return None if self.ss is None else self.ss.shape[1:]
 
     def find_sum(self, node, sum):
         if node >= self.buffer_size:
@@ -153,10 +150,8 @@ class WeightedExperienceBuffer(object):
              self.weight_sums[1]) ** -self.beta
 
         return (indexes,
-                np.transpose(self.ss[:, indexes]), self.aa[
-                    indexes], self.rr[indexes],
-                np.transpose(self.ss1[:, indexes]), self.gg[indexes],
-                w / max_w)
+                self.ss[indexes, ...], self.aa[indexes], self.rr[indexes],
+                self.ss1[indexes, ...], self.gg[indexes], w / max_w)
 
 
 def HuberLoss(tensor, boundary):
@@ -175,4 +170,14 @@ def ClipGradient(grads, clip):
         tf.summary.scalar('Scalars/Grad_norm', global_norm)
         grads = zip(tf.clip_by_global_norm(gg, clip, global_norm)[0], vv)
     return grads
+
+def Select(value, index):
+    # Value - float tensor of (batch, actions) size
+    # index - int32 tensor of (batch) size
+    # returns float tensor of batch size where in every batch the element from index is selected
+    batch_size = tf.shape(value)[0]
+    batch = tf.range(0, batch_size)
+    ind = tf.concat([tf.expand_dims(batch, 1),
+                     tf.expand_dims(index, 1)], 1)
+    return tf.gather_nd(value, ind)
 

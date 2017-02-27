@@ -7,6 +7,7 @@ import gym
 import numpy as np
 import tensorflow as tf
 
+import atari_wrappers
 import tools
 
 tf.app.flags.DEFINE_string('base_dir', '', 'Base directory to save summaries and checkpoints')
@@ -46,34 +47,78 @@ tf.app.flags.DEFINE_boolean('image_summaries', True,
 
 FLAGS = tf.app.flags.FLAGS
 
-def Select(value, index):
-    # Value - float tensor of (batch, actions) size
-    # index - int32 tensor of (batch) size
-    # returns float tensor of batch size where in every batch the element from index is selected
-    batch_size = tf.shape(value)[0]
-    batch = tf.range(0, batch_size)
-    ind = tf.concat([tf.expand_dims(batch, 1),
-                     tf.expand_dims(index, 1)], 1)
-    return tf.gather_nd(value, ind)
+def EnvFactory(env_name):
+    parts = env_name.split(':')
+    if len(parts) > 2:
+        raise ValueError('Incorrect environment name %s' % env_name)
+
+    env = gym.make(parts[0])
+    if len(parts) == 2:
+        for letter in parts[1]:
+            if letter == 'L':
+                env = atari_wrappers.EpisodicLifeEnv(env)
+            elif letter == 'N':
+                env = atari_wrappers.NoopResetEnv(env, noop_max=30)
+            elif letter == 'S':
+                env = atari_wrappers.MaxAndSkipEnv(env, skip=4)
+            elif letter == 'F':
+                env = atari_wrappers.FireResetEnv(env)
+            elif letter == 'C':
+                env = atari_wrappers.ClippedRewardsWrapper(env)
+            elif letter == 'P':
+                env = atari_wrappers.ProcessFrame84(env)
+            else:
+                raise ValueError('Unexpected code of wrapper %s' % letter)
+    return env
+
+
+def ConvQNetwork(state, num_actions, unused_is_training):
+    with tf.variable_scope("convnet"):
+        # original architecture
+        state = tf.contrib.layers.convolution2d(state, num_outputs=32, kernel_size=8, stride=4,
+                                                activation_fn=tf.nn.elu)
+        tf.contrib.layers.summarize_tensor(state)
+        state = tf.contrib.layers.convolution2d(state, num_outputs=64, kernel_size=4, stride=2,
+                                                activation_fn=tf.nn.elu)
+        tf.contrib.layers.summarize_tensor(state)
+        state = tf.contrib.layers.convolution2d(state, num_outputs=64, kernel_size=3, stride=1,
+                                                activation_fn=tf.nn.elu)
+        tf.contrib.layers.summarize_tensor(state)
+
+    state = tf.contrib.layers.flatten(state)
+    with tf.variable_scope("action_value"):
+        state = tf.contrib.layers.fully_connected(
+            state, num_outputs=512, activation_fn=tf.nn.elu)
+        tf.contrib.layers.summarize_tensor(state)
+
+        value = tf.contrib.layers.linear(state, 1, scope='value')
+        tf.contrib.layers.summarize_tensor(value)
+        adv = tf.contrib.layers.linear(state, num_actions, scope='advantage')
+        adv = tf.subtract(adv, tf.reduce_mean(adv, reduction_indices=1, keep_dims=True),
+                          'advantage')
+        tf.contrib.layers.summarize_tensor(adv)
+
+        output = tf.add(value, adv, 'output')
+        return output
 
 
 def CartPoleQNetwork(state, num_actions, unused_is_training):
     hidden = tf.contrib.layers.fully_connected(
-        state, 64,
+        state, 256,
         activation_fn=tf.nn.elu,
         weights_initializer=tf.truncated_normal_initializer(stddev=0.1),
         weights_regularizer=tf.contrib.layers.l2_regularizer(0.005),
         scope='hidden1')
     tf.contrib.layers.summarize_tensor(hidden)
     hidden = tf.contrib.layers.fully_connected(
-        hidden, 64,
+        hidden, 256,
         activation_fn=tf.nn.elu,
         weights_initializer=tf.truncated_normal_initializer(stddev=0.1),
         weights_regularizer=tf.contrib.layers.l2_regularizer(0.005),
         scope='hidden2')
     tf.contrib.layers.summarize_tensor(hidden)
     hidden = tf.contrib.layers.fully_connected(
-        hidden, 64,
+        hidden, 256,
         activation_fn=tf.nn.elu,
         weights_initializer=tf.truncated_normal_initializer(stddev=0.1),
         weights_regularizer=tf.contrib.layers.l2_regularizer(0.005),
@@ -234,7 +279,7 @@ def main(argv):
                           'bs-%d' % FLAGS.batch_size,
                           FLAGS.exploration)
 
-    env = gym.make(FLAGS.env)
+    env = EnvFactory(FLAGS.env)
     buf = ReplayBufferFactory(FLAGS.buffer)
     def FillBuffer(*args):
         buf.add(*args)
@@ -244,12 +289,13 @@ def main(argv):
         GenerateExperience(env, lambda _: env.action_space.sample(),
                            FillBuffer, lambda *args: None)
 
-    state2q = CartPoleQNetwork
+    # state2q = CartPoleQNetwork
+    state2q = ConvQNetwork
 
-    state = tf.placeholder(tf.float32, shape=[None, buf.state_size], name='state')
+    state = tf.placeholder(tf.float32, shape=[None] + list(buf.state_shape), name='state')
     action = tf.placeholder(tf.int32, shape=[None], name='action')
     reward = tf.placeholder(tf.float32, shape=[None], name='reward')
-    state1 = tf.placeholder(tf.float32, shape=[None, buf.state_size], name='state1')
+    state1 = tf.placeholder(tf.float32, shape=[None] + list(buf.state_shape), name='state1')
     gamma = tf.placeholder(tf.float32, shape=[None], name='gamma')
     is_weights = tf.placeholder(tf.float32, shape=[None], name='is_weights')
     is_training = tf.placeholder(tf.bool, shape=None, name='is_training')
@@ -268,9 +314,9 @@ def main(argv):
     copy_op = tf.group(*[tf.assign(y, x) for x, y in zip(vars_pred, vars_target)])
 
     act_s1 = tf.cast(tf.argmax(qvalues1, dimension=1), tf.int32)
-    q_s1 = Select(qvalues_target, act_s1)
+    q_s1 = tools.Select(qvalues_target, act_s1)
     target_q = tf.stop_gradient(reward + gamma * q_s1)
-    q = Select(qvalues, action)
+    q = tools.Select(qvalues, action)
 
     global_step = tf.Variable(0, name='global_step', trainable=False)
     policy = PolicyFactory(FLAGS.exploration, qvalues, global_step)
@@ -298,7 +344,6 @@ def main(argv):
     for grad, v in grads:
         if grad is not None:
             tf.summary.histogram('{}/grad'.format(v.name), grad)
-        # tf.summary.histogram(v.name, v)
 
     train_op = tf.group(optimizer.apply_gradients(grads, global_step),
                         *tf.get_collection(tf.GraphKeys.UPDATE_OPS))
@@ -315,7 +360,7 @@ def main(argv):
         steps = {'action': 0, 'time': time.time()}
 
         def Policy(obs):
-            return sess.run(policy, {state: np.reshape(obs, (1, -1)), is_training: False})
+            return sess.run(policy, {state: np.expand_dims(obs, 0), is_training: False})
 
         def Stat(reward, length):
             writer.add_summary(tf.Summary(
