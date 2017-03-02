@@ -1,3 +1,4 @@
+import math
 import os
 import re
 import shutil
@@ -32,7 +33,7 @@ tf.app.flags.DEFINE_integer('init_buffer_size', 10 ** 5,
                             'Minimum number of replays to start learning')
 
 # Parameters of experience generation
-# tf.app.flags.DEFINE_string('experience', '20.99', 'Experience generation .')
+tf.app.flags.DEFINE_float('experience', 1.99, 'Experience generation.')
 
 # Exploration specification
 # e-3-01-1M - epsilon-greedy, starts at .3 and decreases until .01 for 1M steps.
@@ -44,6 +45,8 @@ tf.app.flags.DEFINE_integer('summary_every_steps', 250, 'The frequence of summar
 
 tf.app.flags.DEFINE_boolean('image_summaries', True,
                             'If True, periodically renders environments to TF summaries')
+
+tf.app.flags.DEFINE_boolean('trace', False, 'Whether to collect TF traces')
 
 FLAGS = tf.app.flags.FLAGS
 
@@ -78,17 +81,17 @@ def ConvQNetwork(state, num_actions, unused_is_training):
         state = tf.contrib.layers.convolution2d(state, num_outputs=32, kernel_size=8, stride=4,
                                                 activation_fn=tf.nn.elu)
         tf.contrib.layers.summarize_tensor(state)
-        state = tf.contrib.layers.convolution2d(state, num_outputs=64, kernel_size=4, stride=2,
+        state = tf.contrib.layers.convolution2d(state, num_outputs=32, kernel_size=4, stride=2,
                                                 activation_fn=tf.nn.elu)
         tf.contrib.layers.summarize_tensor(state)
-        state = tf.contrib.layers.convolution2d(state, num_outputs=64, kernel_size=3, stride=1,
+        state = tf.contrib.layers.convolution2d(state, num_outputs=32, kernel_size=3, stride=1,
                                                 activation_fn=tf.nn.elu)
         tf.contrib.layers.summarize_tensor(state)
 
     state = tf.contrib.layers.flatten(state)
     with tf.variable_scope("action_value"):
         state = tf.contrib.layers.fully_connected(
-            state, num_outputs=512, activation_fn=tf.nn.elu)
+            state, num_outputs=256, activation_fn=tf.nn.elu)
         tf.contrib.layers.summarize_tensor(state)
 
         value = tf.contrib.layers.linear(state, 1, scope='value')
@@ -141,8 +144,6 @@ def CartPoleQNetwork(state, num_actions, unused_is_training):
     return output
 
 
-ROLLOUT_LEN = 1 # 20
-GAMMA = 0.99
 UPDATE_STEPS = 10000
 
 
@@ -211,14 +212,14 @@ def PolicyFactory(spec, qvalues, global_step):
     return policy
 
 
-def GenerateExperience(env, policy, step_callback, stats_callback):
+def GenerateExperience(env, policy, rollout_len, gamma, step_callback, stats_callback):
     episode_rew = 0.
     episode_len = 0.
     old_s = env.reset()
     while True:
         ss, aa, rr, ss1, gg = [], [], [], [], []
         done = False
-        while not done and len(ss) < ROLLOUT_LEN:
+        while not done and len(ss) < rollout_len:
             a = policy(old_s)
 
             s, r, done, _ = env.step(a)
@@ -226,7 +227,7 @@ def GenerateExperience(env, policy, step_callback, stats_callback):
             aa.append(a)
             rr.append(r)
             ss1.append(s)
-            gg.append(GAMMA if not done else 0.)
+            gg.append(gamma if not done else 0.)
 
             episode_rew += r
             episode_len += 1
@@ -276,10 +277,15 @@ def InitSession(sess, folder):
 def main(argv):
     folder = os.path.join(FLAGS.base_dir, FLAGS.env, 'lr-%.1E' % FLAGS.lr,
                           FLAGS.buffer,
+                          '%s' % FLAGS.experience,
                           'bs-%d' % FLAGS.batch_size,
                           FLAGS.exploration)
 
     env = EnvFactory(FLAGS.env)
+
+    rollout_len = int(math.floor(FLAGS.experience))
+    gamma_exp = FLAGS.experience - rollout_len
+
     buf = ReplayBufferFactory(FLAGS.buffer)
     def FillBuffer(*args):
         buf.add(*args)
@@ -287,10 +293,12 @@ def main(argv):
 
     while buf.inserted < FLAGS.init_buffer_size:
         GenerateExperience(env, lambda _: env.action_space.sample(),
+                           rollout_len, gamma_exp,
                            FillBuffer, lambda *args: None)
 
     # state2q = CartPoleQNetwork
     state2q = ConvQNetwork
+    print buf.state_shape
 
     state = tf.placeholder(tf.float32, shape=[None] + list(buf.state_shape), name='state')
     action = tf.placeholder(tf.int32, shape=[None], name='action')
@@ -383,14 +391,28 @@ def main(argv):
                 if cur_step > FLAGS.steps:
                     return False  # Time to stop
 
-                if cur_step % FLAGS.summary_every_steps != 0:
-                    weights, _ = sess.run([td_err_weight, train_op], feed_dict)
+                run_metadata = tf.RunMetadata()
+                additional_kwargs = {}
+                need_trace = FLAGS.trace and cur_step % 100 == 0
+                if need_trace:
+                    additional_kwargs['options'] = tf.RunOptions(
+                        trace_level=tf.RunOptions.FULL_TRACE)
+                    additional_kwargs['run_metadata'] = run_metadata
+                if cur_step % FLAGS.summary_every_steps != 0 or cur_step < 10:
+                    weights, _ = sess.run([td_err_weight, train_op], feed_dict, **additional_kwargs)
                 else:
                     if FLAGS.image_summaries:
                         feed_dict[render_image] = env.render(mode='rgb_array')
                     weights, _, smr = sess.run(
-                        [td_err_weight, train_op, summary_op], feed_dict)
+                        [td_err_weight, train_op, summary_op], feed_dict, **additional_kwargs)
                     writer.add_summary(smr, cur_step)
+
+                if need_trace:
+                    from tensorflow.python.client import timeline
+                    trace = timeline.Timeline(step_stats=run_metadata.step_stats)
+                    with open('timeline.ctf.json', 'w') as trace_file:
+                        trace_file.write(trace.generate_chrome_trace_format())
+
 
                 for ii, td_w in zip(idx, weights):
                     buf.tree_update(ii, td_w)
@@ -407,7 +429,9 @@ def main(argv):
                     steps['time'] = time.time()
             return True
 
-        GenerateExperience(env, Policy, Step, Stat)
+        GenerateExperience(env, Policy,
+                           rollout_len, gamma_exp,
+                           Step, Stat)
 
 
 if __name__ == "__main__":
