@@ -4,11 +4,9 @@ import re
 import shutil
 import time
 
-import gym
 import numpy as np
 import tensorflow as tf
 
-import atari_wrappers
 import tools
 
 tf.app.flags.DEFINE_string('base_dir', '', 'Base directory to save summaries and checkpoints')
@@ -18,7 +16,7 @@ tf.app.flags.DEFINE_float('lr', 0.0001, 'Learning rate')
 tf.app.flags.DEFINE_float('clip_grad', 10., 'Gradients norm to clip gradients to')
 tf.app.flags.DEFINE_integer('steps', 10 * 10 ** 6, 'Number of steps to run learning for')
 tf.app.flags.DEFINE_integer('steps_per_action', 5, 'How many NN updates per one env action')
-tf.app.flags.DEFINE_boolean('restart', True,
+tf.app.flags.DEFINE_boolean('restart', False,
                             'If true, starts over, otherwise, starts from the last checkpoint')
 tf.app.flags.DEFINE_integer('batch_size', 64, 'Batch size')
 
@@ -49,30 +47,6 @@ tf.app.flags.DEFINE_boolean('image_summaries', True,
 tf.app.flags.DEFINE_boolean('trace', False, 'Whether to collect TF traces')
 
 FLAGS = tf.app.flags.FLAGS
-
-def EnvFactory(env_name):
-    parts = env_name.split(':')
-    if len(parts) > 2:
-        raise ValueError('Incorrect environment name %s' % env_name)
-
-    env = gym.make(parts[0])
-    if len(parts) == 2:
-        for letter in parts[1]:
-            if letter == 'L':
-                env = atari_wrappers.EpisodicLifeEnv(env)
-            elif letter == 'N':
-                env = atari_wrappers.NoopResetEnv(env, noop_max=30)
-            elif letter == 'S':
-                env = atari_wrappers.MaxAndSkipEnv(env, skip=4)
-            elif letter == 'F':
-                env = atari_wrappers.FireResetEnv(env)
-            elif letter == 'C':
-                env = atari_wrappers.ClippedRewardsWrapper(env)
-            elif letter == 'P':
-                env = atari_wrappers.ProcessFrame84(env)
-            else:
-                raise ValueError('Unexpected code of wrapper %s' % letter)
-    return env
 
 
 def ConvQNetwork(state, num_actions, unused_is_training):
@@ -106,6 +80,7 @@ def ConvQNetwork(state, num_actions, unused_is_training):
 
 
 def CartPoleQNetwork(state, num_actions, unused_is_training):
+    state = tf.contrib.layers.flatten(state)
     hidden = tf.contrib.layers.fully_connected(
         state, 256,
         activation_fn=tf.nn.elu,
@@ -253,26 +228,6 @@ def GenerateExperience(env, policy, rollout_len, gamma, step_callback, stats_cal
             return
 
 
-def InitSession(sess, folder):
-    """If folder has checkpoint, reinitializes session with it"""
-    last_step = -1
-    if not FLAGS.restart:
-        for fname in os.listdir(folder):
-            m = re.match(r'model.ckpt-(\d+).meta', fname)
-            if m:
-                step = int(m.group(1))
-                if step > last_step:
-                    last_step = step
-
-    saver = tf.train.Saver()
-    if last_step > 0:
-        saver.restore(sess, os.path.join(folder, 'model.ckpt-%d' % last_step))
-    else:
-        if os.path.exists(folder):
-            shutil.rmtree(folder)
-        sess.run(tf.global_variables_initializer())
-
-    return saver
 
 def main(argv):
     folder = os.path.join(FLAGS.base_dir, FLAGS.env, 'lr-%.1E' % FLAGS.lr,
@@ -281,7 +236,7 @@ def main(argv):
                           'bs-%d' % FLAGS.batch_size,
                           FLAGS.exploration)
 
-    env = EnvFactory(FLAGS.env)
+    env = tools.EnvFactory(FLAGS.env)
 
     rollout_len = int(math.floor(FLAGS.experience))
     gamma_exp = FLAGS.experience - rollout_len
@@ -296,8 +251,8 @@ def main(argv):
                            rollout_len, gamma_exp,
                            FillBuffer, lambda *args: None)
 
-    # state2q = CartPoleQNetwork
-    state2q = ConvQNetwork
+    state2q = CartPoleQNetwork
+    # state2q = ConvQNetwork
     print buf.state_shape
 
     state = tf.placeholder(tf.float32, shape=[None] + list(buf.state_shape), name='state')
@@ -307,6 +262,7 @@ def main(argv):
     gamma = tf.placeholder(tf.float32, shape=[None], name='gamma')
     is_weights = tf.placeholder(tf.float32, shape=[None], name='is_weights')
     is_training = tf.placeholder(tf.bool, shape=None, name='is_training')
+    tf.add_to_collection('placeholders', state)
 
     with tf.variable_scope('model', reuse=False):
         qvalues = state2q(state, env.action_space.n, is_training)
@@ -328,6 +284,9 @@ def main(argv):
 
     global_step = tf.Variable(0, name='global_step', trainable=False)
     policy = PolicyFactory(FLAGS.exploration, qvalues, global_step)
+
+    q_policy = tf.argmax(qvalues, axis=1, name='q_policy')
+    tf.add_to_collection('q_policy', q_policy)
 
     delta = target_q - q
     td_err_weight = tf.abs(delta)
@@ -361,7 +320,7 @@ def main(argv):
     summary_op = tf.summary.merge_all()
 
     with tf.Session() as sess:
-        saver = InitSession(sess, folder)
+        saver = tools.InitSession(sess, folder, FLAGS.restart)
         writer = tf.summary.FileWriter(folder)
         writer.add_graph(tf.get_default_graph())
 

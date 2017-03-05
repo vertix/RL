@@ -1,9 +1,14 @@
 import os
 import random
+import re
 import time
+import gym
 
 import numpy as np
 import tensorflow as tf
+
+import atari_wrappers
+import game2048
 
 
 class ExperienceBuffer(object):
@@ -181,3 +186,61 @@ def Select(value, index):
                      tf.expand_dims(index, 1)], 1)
     return tf.gather_nd(value, ind)
 
+
+def EnvFactory(env_name):
+    parts = env_name.split(':')
+    if len(parts) > 2:
+        raise ValueError('Incorrect environment name %s' % env_name)
+
+    if parts[0] == '2048':
+        env = game2048.Game2048()
+    else:
+        env = gym.make(parts[0])
+
+    if len(parts) == 2:
+        for letter in parts[1]:
+            if letter == 'L':
+                env = atari_wrappers.EpisodicLifeEnv(env)
+            elif letter == 'N':
+                env = atari_wrappers.NoopResetEnv(env, noop_max=30)
+            elif letter == 'S':
+                env = atari_wrappers.MaxAndSkipEnv(env, skip=4)
+            elif letter == 'F':
+                env = atari_wrappers.FireResetEnv(env)
+            elif letter == 'C':
+                env = atari_wrappers.ClippedRewardsWrapper(env)
+            elif letter == 'P':
+                env = atari_wrappers.ProcessFrame84(env)
+            else:
+                raise ValueError('Unexpected code of wrapper %s' % letter)
+    return env
+
+
+def GetLastCheckpoint(folder):
+    last_step = None
+    for fname in os.listdir(folder):
+        m = re.match(r'model.ckpt-(\d+).meta', fname)
+        if m:
+            step = int(m.group(1))
+            if step > last_step:
+                last_step = step
+    if last_step is not None:
+        return 'model.ckpt-%d' % last_step
+    return None
+
+
+def InitSession(sess, folder, restart):
+    """If folder has checkpoint, reinitializes session with it"""
+    ckpt = None
+    if not restart:
+        ckpt = GetLastCheckpoint(folder)
+
+    saver = tf.train.Saver()
+    if ckpt is not None:
+        saver.restore(sess, os.path.join(folder, ckpt))
+    else:
+        if os.path.exists(folder):
+            shutil.rmtree(folder)
+        sess.run(tf.global_variables_initializer())
+
+    return saver

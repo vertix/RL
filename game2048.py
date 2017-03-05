@@ -95,3 +95,4 @@ class Game2048(gym.Env):
 
             sys.stdout.write('|'.join([str(int(v)).center(3) for v in self.state[i, :]]))
             sys.stdout.write('\n')
+        sys.stdout.write('\n')
