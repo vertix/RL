@@ -58,8 +58,8 @@ class ExperienceBuffer(object):
             return None, None, None, None, None
 
         indexes = np.random.choice(min(self.buffer_size, self.inserted), size)
-        return (indexes, np.transpose(self.ss[indexes, ...]), self.aa[indexes], self.rr[indexes],
-                np.transpose(self.ss1[indexes, ...]), self.gg[indexes], np.ones(len(indexes)))
+        return (indexes, self.ss[indexes, ...], self.aa[indexes], self.rr[indexes],
+                self.ss1[indexes, ...], self.gg[indexes], np.ones(len(indexes)))
 
 
 class WeightedExperienceBuffer(object):
