@@ -1,7 +1,6 @@
 import math
 import os
 import re
-import shutil
 import time
 
 import numpy as np
@@ -214,7 +213,7 @@ def GenerateExperience(env, policy, rollout_len, gamma, step_callback, stats_cal
             rew = rr[i] + gg[i] * rew
             g *= gg[i]
             ss1[i] = old_s
-            rr[i] = r
+            rr[i] = rew
             gg[i] = g
 
         if done:

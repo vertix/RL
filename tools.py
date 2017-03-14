@@ -2,6 +2,8 @@ import os
 import random
 import re
 import time
+import shutil
+
 import gym
 
 import numpy as np
@@ -18,17 +20,19 @@ class ExperienceBuffer(object):
         self.ss, self.aa, self.rr, self.ss1, self.gg = None, None, None, None, None
         self.buffer_size = buffer_size
         self.inserted = 0
-        self.index = []
 
     def add(self, s, a, r, s1, gamma, unused_weight):
         if self.ss is None:
             # Initialize
             state_shape = list(s.shape[1:])
+            s1_shape = list(s1.shape[1:])
+            g_shape = list(gamma.shape[1:])
+            a_shape = list(a.shape[1:])
             self.ss = np.zeros([self.buffer_size] + state_shape, dtype=np.float32)
-            self.aa = np.zeros(self.buffer_size, dtype=np.int16)
-            self.ss1 = np.zeros([self.buffer_size] + state_shape, dtype=np.float32)
+            self.aa = np.zeros([self.buffer_size] + a_shape, dtype=np.int16)
+            self.ss1 = np.zeros([self.buffer_size] + s1_shape, dtype=np.float32)
             self.rr = np.zeros(self.buffer_size, dtype=np.float32)
-            self.gg = np.zeros(self.buffer_size, dtype=np.float32)
+            self.gg = np.zeros([self.buffer_size] + g_shape ,dtype=np.float32)
 
         indexes = []
         for _ in a:
@@ -37,14 +41,10 @@ class ExperienceBuffer(object):
             indexes.append(cur_index)
 
         self.ss[indexes, ...] = s
-        self.aa[indexes] = a
+        self.aa[indexes, ...] = a
         self.rr[indexes] = r
         self.ss1[indexes, ...] = s1
-        self.gg[indexes] = gamma
-
-        if len(self.index) < self.buffer_size:
-            self.index.append(self.inserted)
-        self.inserted += 1
+        self.gg[indexes, ...] = gamma
 
     @property
     def state_shape(self):
@@ -58,8 +58,8 @@ class ExperienceBuffer(object):
             return None, None, None, None, None
 
         indexes = np.random.choice(min(self.buffer_size, self.inserted), size)
-        return (indexes, self.ss[indexes, ...], self.aa[indexes], self.rr[indexes],
-                self.ss1[indexes, ...], self.gg[indexes], np.ones(len(indexes)))
+        return (indexes, self.ss[indexes, ...], self.aa[indexes, ...], self.rr[indexes],
+                self.ss1[indexes, ...], self.gg[indexes, ...], np.ones(len(indexes)))
 
 
 class WeightedExperienceBuffer(object):
@@ -175,6 +175,7 @@ def ClipGradient(grads, clip):
         tf.summary.scalar('Scalars/Grad_norm', global_norm)
         grads = zip(tf.clip_by_global_norm(gg, clip, global_norm)[0], vv)
     return grads
+
 
 def Select(value, index):
     # Value - float tensor of (batch, actions) size
