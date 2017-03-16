@@ -219,12 +219,13 @@ def EnvFactory(env_name):
 
 def GetLastCheckpoint(folder):
     last_step = None
-    for fname in os.listdir(folder):
-        m = re.match(r'model.ckpt-(\d+).meta', fname)
-        if m:
-            step = int(m.group(1))
-            if step > last_step:
-                last_step = step
+    if os.path.exists(folder):
+        for fname in os.listdir(folder):
+            m = re.match(r'model.ckpt-(\d+).meta', fname)
+            if m:
+                step = int(m.group(1))
+                if step > last_step:
+                    last_step = step
     if last_step is not None:
         return 'model.ckpt-%d' % last_step
     return None
