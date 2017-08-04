@@ -39,7 +39,7 @@ class ExperienceBuffer(object):
             cur_index = self.inserted % self.buffer_size
             self.inserted += 1
             indexes.append(cur_index)
-
+        
         self.ss[indexes, ...] = s
         self.aa[indexes, ...] = a
         self.rr[indexes] = r
@@ -206,6 +206,8 @@ def EnvFactory(env_name):
                 env = atari_wrappers.NoopResetEnv(env, noop_max=30)
             elif letter == 'S':
                 env = atari_wrappers.MaxAndSkipEnv(env, skip=4)
+            elif letter == 'X':
+                env = atari_wrappers.StackAndSkipEnv(env, skip=3)
             elif letter == 'F':
                 env = atari_wrappers.FireResetEnv(env)
             elif letter == 'C':

@@ -51,20 +51,20 @@ FLAGS = tf.app.flags.FLAGS
 def ConvQNetwork(state, num_actions, unused_is_training):
     with tf.variable_scope("convnet"):
         # original architecture
-        state = tf.contrib.layers.convolution2d(state, num_outputs=32, kernel_size=8, stride=4,
+        state = tf.contrib.layers.convolution2d(state, num_outputs=16, kernel_size=8, stride=4,
                                                 activation_fn=tf.nn.elu)
         tf.contrib.layers.summarize_tensor(state)
-        state = tf.contrib.layers.convolution2d(state, num_outputs=64, kernel_size=4, stride=2,
+        state = tf.contrib.layers.convolution2d(state, num_outputs=32, kernel_size=4, stride=2,
                                                 activation_fn=tf.nn.elu)
         tf.contrib.layers.summarize_tensor(state)
-        state = tf.contrib.layers.convolution2d(state, num_outputs=64, kernel_size=3, stride=1,
+        state = tf.contrib.layers.convolution2d(state, num_outputs=32, kernel_size=3, stride=1,
                                                 activation_fn=tf.nn.elu)
         tf.contrib.layers.summarize_tensor(state)
 
     state = tf.contrib.layers.flatten(state)
     with tf.variable_scope("action_value"):
         state = tf.contrib.layers.fully_connected(
-            state, num_outputs=512, activation_fn=tf.nn.elu)
+            state, num_outputs=128, activation_fn=tf.nn.elu)
         tf.contrib.layers.summarize_tensor(state)
 
         value = tf.contrib.layers.linear(state, 1, scope='value')
@@ -250,8 +250,8 @@ def main(argv):
                            rollout_len, gamma_exp,
                            FillBuffer, lambda *args: None)
 
-    state2q = CartPoleQNetwork
-    # state2q = ConvQNetwork
+    # state2q = CartPoleQNetwork
+    state2q = ConvQNetwork
     print buf.state_shape
 
     state = tf.placeholder(tf.float32, shape=[None] + list(buf.state_shape), name='state')
